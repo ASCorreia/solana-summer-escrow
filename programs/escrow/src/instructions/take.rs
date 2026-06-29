@@ -9,41 +9,52 @@ pub struct Take<'info> {
     pub taker: Signer<'info>,
     #[account(mut)]
     pub maker: SystemAccount<'info>,
+    // These accounts are Boxed to keep them off the BPF stack. Take validates
+    // 12 accounts and runs init_if_needed for two ATAs, and Anchor's generated
+    // checks expand inline. The on-chain stack frame is only 4KB, so holding all
+    // of these account wrappers there overflows it (Access violation in stack
+    // frame). Box moves the data to the heap and leaves only a pointer on the
+    // stack. Box<Account>/Box<InterfaceAccount> are fully supported by Anchor
+    // and are transparent to callers, so the client account list is unchanged.
     #[account(
         mut,
-        close = taker, 
-        has_one = mint_a, 
+        close = taker,
+        has_one = mint_a,
         has_one = mint_b,
     )]
-    pub escrow: Account<'info, Escrow>,
-    pub mint_a: InterfaceAccount<'info, Mint>,
-    pub mint_b: InterfaceAccount<'info, Mint>,
+    pub escrow: Box<Account<'info, Escrow>>,
+    pub mint_a: Box<InterfaceAccount<'info, Mint>>,
+    pub mint_b: Box<InterfaceAccount<'info, Mint>>,
     #[account(
         init_if_needed,
         payer = taker,
         associated_token::mint = mint_a,
         associated_token::authority = taker,
     )]
-    pub taker_ata_a: InterfaceAccount<'info, TokenAccount>,
+    pub taker_ata_a: Box<InterfaceAccount<'info, TokenAccount>>,
+    // taker_ata_b is the taker's account for mint_b, the token the taker pays to
+    // the maker (see the first transfer in handler). The mint here must be
+    // mint_b; the original mint_a was wrong and made Anchor expect the taker's
+    // mint_a ATA, failing the associated_token constraint.
     #[account(
         mut,
-        associated_token::mint = mint_a,
+        associated_token::mint = mint_b,
         associated_token::authority = taker,
     )]
-    pub taker_ata_b: InterfaceAccount<'info, TokenAccount>,
+    pub taker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed,
         payer = taker,
         associated_token::mint = mint_b,
         associated_token::authority = maker,
     )]
-    pub maker_ata_b: InterfaceAccount<'info, TokenAccount>,
+    pub maker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
         associated_token::mint = mint_a,
         associated_token::authority = escrow,
     )]
-    pub vault_a: InterfaceAccount<'info, TokenAccount>,
+    pub vault_a: Box<InterfaceAccount<'info, TokenAccount>>,
     pub system_program: Program<'info, System>,
     pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -72,10 +83,14 @@ pub fn handler(ctx: Context<Take>) -> Result<()> {
         authority: ctx.accounts.escrow.to_account_info(),
     };
 
+    // Signer seeds must reproduce the exact escrow PDA derivation from `make`:
+    // [b"escrow", maker, seed, bump]. Omitting `seed` derives a different
+    // address, so the escrow cannot sign for the vault and the CPI fails.
     let seeds = &[
         &b"escrow"[..],
         ctx.accounts.escrow.maker.as_ref(),
-        &[ctx.accounts.escrow.bump]
+        &ctx.accounts.escrow.seed.to_le_bytes(),
+        &[ctx.accounts.escrow.bump],
     ];
     let signer_seeds = &[&seeds[..]];
 
@@ -100,10 +115,14 @@ pub fn close_vault(ctx: Context<Take>) -> Result<()> {
         authority: ctx.accounts.escrow.to_account_info(),
     };
 
+    // Signer seeds must reproduce the exact escrow PDA derivation from `make`:
+    // [b"escrow", maker, seed, bump]. Omitting `seed` derives a different
+    // address, so the escrow cannot sign for the vault and the CPI fails.
     let seeds = &[
         &b"escrow"[..],
         ctx.accounts.escrow.maker.as_ref(),
-        &[ctx.accounts.escrow.bump]
+        &ctx.accounts.escrow.seed.to_le_bytes(),
+        &[ctx.accounts.escrow.bump],
     ];
     let signer_seeds = &[&seeds[..]];
 
