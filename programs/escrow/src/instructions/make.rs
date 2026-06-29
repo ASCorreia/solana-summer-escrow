@@ -46,6 +46,7 @@ pub fn handler(ctx: Context<Make>, seed: u16, amount_a: u64, amount_b: u64) -> R
         mint_b: ctx.accounts.mint_b.key(),
         amount_a,
         amount_b,
+        created_at: Clock::get()?.unix_timestamp,
         seed,
         bump: ctx.bumps.escrow,
     });
