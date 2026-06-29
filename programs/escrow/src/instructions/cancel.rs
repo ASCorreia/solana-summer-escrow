@@ -2,9 +2,11 @@ use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
 use crate::Escrow;
+use crate::error::ErrorCode;
 
 #[derive(Accounts)]
 pub struct Cancel<'info> {
+    #[account(mut)] 
     pub maker: Signer<'info>,
     #[account(
         mut,
@@ -30,6 +32,14 @@ pub struct Cancel<'info> {
 }
 
 pub fn handler(ctx: Context<Cancel>) -> Result<()> {
+
+    let current_time = Clock::get()?.unix_timestamp;
+    require!(
+        current_time >= ctx.accounts.escrow.created_at + 300, 
+        ErrorCode::TimeLocked
+    );
+
+
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.vault_a.to_account_info(),
         mint: ctx.accounts.mint_a.to_account_info(),
