@@ -75,6 +75,7 @@ pub fn handler(ctx: Context<Take>) -> Result<()> {
     let seeds = &[
         &b"escrow"[..],
         ctx.accounts.escrow.maker.as_ref(),
+        &ctx.accounts.escrow.seed.to_le_bytes(),
         &[ctx.accounts.escrow.bump]
     ];
     let signer_seeds = &[&seeds[..]];
@@ -103,6 +104,7 @@ pub fn close_vault(ctx: Context<Take>) -> Result<()> {
     let seeds = &[
         &b"escrow"[..],
         ctx.accounts.escrow.maker.as_ref(),
+        &ctx.accounts.escrow.seed.to_le_bytes(),
         &[ctx.accounts.escrow.bump]
     ];
     let signer_seeds = &[&seeds[..]];
