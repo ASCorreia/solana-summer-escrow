@@ -59,6 +59,7 @@ pub fn close_vault(ctx: Context<Cancel>) -> Result<()> {
     let seeds = &[
         &b"escrow"[..],
         ctx.accounts.escrow.maker.as_ref(),
+        &ctx.accounts.escrow.seed.to_le_bytes(),
         &[ctx.accounts.escrow.bump]
     ];
     let signer_seeds = &[&seeds[..]];
