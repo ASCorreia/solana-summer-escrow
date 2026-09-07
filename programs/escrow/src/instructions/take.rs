@@ -11,7 +11,7 @@ pub struct Take<'info> {
     pub maker: SystemAccount<'info>,
     #[account(
         mut,
-        close = taker, 
+        close = maker, // Returning the rent to the maker
         has_one = mint_a, 
         has_one = mint_b,
     )]

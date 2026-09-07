@@ -40,6 +40,9 @@ pub struct Make<'info> {
 }
 
 pub fn handler(ctx: Context<Make>, seed: u16, amount_a: u64, amount_b: u64) -> Result<()> {
+
+    let clock = Clock::get()?;
+    
     ctx.accounts.escrow.set_inner(Escrow {
         maker: ctx.accounts.maker.key(),
         mint_a: ctx.accounts.mint_a.key(),
@@ -48,6 +51,7 @@ pub fn handler(ctx: Context<Make>, seed: u16, amount_a: u64, amount_b: u64) -> R
         amount_b,
         seed,
         bump: ctx.bumps.escrow,
+        created_at: clock.unix_timestamp
     });
 
     let cpi_accounts = TransferChecked {

@@ -1,10 +1,12 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
+use crate::error::ErrorCode;
 
 use crate::Escrow;
 
 #[derive(Accounts)]
 pub struct Cancel<'info> {
+    #[account(mut)] // mut because maker's balance is gonna increase when escrow is closed
     pub maker: Signer<'info>,
     #[account(
         mut,
@@ -30,6 +32,10 @@ pub struct Cancel<'info> {
 }
 
 pub fn handler(ctx: Context<Cancel>) -> Result<()> {
+    let clock = Clock::get()?;
+
+    require!(clock.unix_timestamp >= ctx.accounts.escrow.created_at + 300, ErrorCode::RejectedCancel);
+
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.vault_a.to_account_info(),
         mint: ctx.accounts.mint_a.to_account_info(),
