@@ -4,4 +4,6 @@ use anchor_lang::prelude::*;
 pub enum ErrorCode {
     #[msg("Custom error message")]
     CustomError,
+    #[msg("Cannot cancel yet , the time lock hasn't expired")]
+    TimeLockActive,
 }
