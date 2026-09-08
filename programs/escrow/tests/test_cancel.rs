@@ -8,7 +8,7 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    solana_program::instruction::Instruction, InstructionData, ToAccountMetas, prelude::Clock,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -202,6 +202,10 @@ fn cancel_returns_the_tokens_to_the_maker() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
 
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 300;
+    svm.set_sysvar(&clock);
+
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
@@ -231,4 +235,46 @@ fn cancel_returns_the_tokens_to_the_maker() {
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
     );
+}
+
+
+
+fn maker_cancel_helper(time_to_wait: i64, should_succeed: bool) {
+    let mut svm = setup_svm();
+
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += time_to_wait;
+    svm.set_sysvar(&clock);
+
+    let cancel_ix = build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a);
+
+    let result = send(&mut svm, &maker, cancel_ix);
+
+    if should_succeed {
+        result.expect("cancel should succeed after the time lock");
+        assert_eq!(token_amount(&svm, &maker_ata_a), AMOUNT_A);
+    } else {
+        let err = result.expect_err("cancel should fail before the time lock");
+        let logs = err.meta.logs.join("\n");
+        assert!(
+            logs.contains("PatienceError"),
+            "expected PatienceError, got {logs}"
+        );
+        assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A);
+    }
+
+}
+
+#[test]
+fn too_early() {
+    let wait_time: i64 = 0;
+    maker_cancel_helper(wait_time, false);
+}
+
+#[test]
+fn late_enough() {
+    let wait_time: i64 = 300;
+    maker_cancel_helper(wait_time, true);
 }
