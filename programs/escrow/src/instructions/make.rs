@@ -48,7 +48,7 @@ pub fn handler(ctx: Context<Make>, seed: u16, amount_a: u64, amount_b: u64) -> R
         amount_b,
         seed,
         bump: ctx.bumps.escrow,
-        created_at,
+        created_at: Clock::get()?.unix_timestamp,
     });
 
     let cpi_accounts = TransferChecked {
