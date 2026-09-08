@@ -10,6 +10,7 @@
 use anchor_lang::{
     solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
+use anchor_lang::prelude::Clock;
 use litesvm::LiteSVM;
 use solana_account::Account;
 use solana_keypair::Keypair;
@@ -231,4 +232,51 @@ fn cancel_returns_the_tokens_to_the_maker() {
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
     );
+}
+
+// cancel -- Too early (expect rejection)
+#[test]
+fn cancel_too_early() {
+let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Currently timestamp is 0 (default value in LiteSVM)
+    let mut clock = svm.get_sysvar::<Clock>();
+
+    clock.unix_timestamp+= 2; // way below the config delay
+    svm.set_sysvar(&clock);
+
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    let err = res.unwrap_err();
+    let logs = err.meta.logs.join("\n");
+    assert!(logs.contains("TimelockActive"),  "expected the time lock error, got: {logs}");
+
+}
+
+
+// cancel -- Late enough (expect success)
+#[test]
+fn cancel_late_enough() {
+    let mut svm  = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let mut clock = svm.get_sysvar::<Clock>();
+
+    clock.unix_timestamp+= 301; // 1 second after the configured delay
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("Instruction should be made right after the configured delay");
+
+
+    
 }
