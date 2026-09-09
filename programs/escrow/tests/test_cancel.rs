@@ -8,9 +8,10 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    InstructionData, ToAccountMetas, solana_program::{instruction::Instruction},
 };
-use litesvm::LiteSVM;
+use anchor_lang::prelude::Clock;
+use litesvm::{LiteSVM};
 use solana_account::Account;
 use solana_keypair::Keypair;
 use solana_message::{Message, VersionedMessage};
@@ -198,13 +199,98 @@ fn build_cancel_ix(
 // ---------- the test ----------
 
 #[test]
-fn cancel_returns_the_tokens_to_the_maker() {
+fn cancel_too_early() {
+    let mut svm = setup_svm();
+    let program_id = escrow::id();
+
+    let maker = Keypair::new();
+    let mint_a = Keypair::new();
+    let mint_b = Keypair::new();
+
+    let maker_pk = maker.pubkey();
+    let mint_a_pk = mint_a.pubkey();
+    let mint_b_pk = mint_b.pubkey();
+
+    svm.airdrop(&maker_pk, 10_000_000_000).unwrap();
+
+    setup_mint(&mut svm, &mint_a, &maker_pk, 6);
+    setup_mint(&mut svm, &mint_b, &maker_pk, 6);
+
+    let seed: u16 = 50;
+    let amount_a: u64 = 1_000_000;
+    let amount_b: u64 = 500_000;
+
+    let maker_ata_a = get_associated_token_address(&maker_pk, &mint_a_pk);
+    setup_token_account(&mut svm, maker_ata_a, mint_a_pk, maker_pk, amount_a);
+
+    let (escrow_pda, _bump) = Pubkey::find_program_address(
+        &[b"escrow", maker_pk.as_ref(), &seed.to_le_bytes()], 
+        &program_id,
+    );
+    let vault_a = get_associated_token_address(&escrow_pda, &mint_a_pk);
+
+
+    let make_instruction = Instruction::new_with_bytes(
+        program_id,
+        &escrow::instruction::Make {
+            seed,
+            amount_a,
+            amount_b,
+        }
+        .data(),
+        escrow::accounts::Make {
+            maker: maker_pk,
+            mint_a: mint_a_pk,
+            mint_b: mint_b_pk,
+            escrow: escrow_pda,
+            maker_ata_a,
+            vault_a,
+            system_program: anchor_lang::system_program::ID,
+            token_program: TOKEN_PROGRAM_ID,
+            associated_token_program: spl_associated_token_account_interface::program::ID,
+        }
+        .to_account_metas(None),
+    );
+
+    send(&mut svm, &maker, make_instruction).expect("make should succeed");
+
+    let cancel_instruction = Instruction::new_with_bytes(
+        program_id, 
+        &escrow::instruction::Cancel {}.data(), 
+        escrow::accounts::Cancel {
+            maker: maker_pk,
+            escrow: escrow_pda,
+            mint_a: mint_a_pk,
+            maker_ata_a,
+            vault_a,
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    );
+
+    let err = send(&mut svm, &maker, cancel_instruction)
+        .expect_err("cancel should be rejected before the five-minute timelock expires");
+    let logs = err.meta.logs.join("\n");
+    assert!(
+        logs.contains("TimeLockActive"),
+        "expected the time lock error, got: {logs}"
+    );
+}
+
+#[test]
+fn cancel_returns_the_tokens_to_the_maker_after_five_mins() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
 
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+
+    // Moving the clock by 5 mins for our require! macro to work.
+    
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
 
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
