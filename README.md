@@ -2,6 +2,7 @@
 
 This example demonstrates how to implement a trustless token escrow using the Anchor framework on Solana. Two parties can exchange SPL tokens without requiring mutual trust — the program holds the maker's tokens in a vault until the taker fulfills the agreed terms, or the maker cancels and reclaims them.
 
+Javier's change
 ---
 
 ## Let's walk through the architecture:
