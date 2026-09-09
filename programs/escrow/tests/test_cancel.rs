@@ -107,6 +107,9 @@ fn send(
     let blockhash = svm.latest_blockhash();
     let msg = Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &blockhash);
     let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[payer]).unwrap();
+        let mut clock = svm.get_sysvar::<anchor_lang::solana_program::clock::Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
     svm.send_transaction(tx)
 }
 
