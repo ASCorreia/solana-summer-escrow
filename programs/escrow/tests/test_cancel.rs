@@ -8,7 +8,7 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    prelude::Clock, solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -110,6 +110,16 @@ fn send(
     svm.send_transaction(tx)
 }
 
+/// Moves the SVM wall clock forward by `seconds`.
+///
+/// `warp_to_slot` advances slots but leaves `unix_timestamp` alone, and the time lock
+/// reads the clock sysvar — so the sysvar is what has to move.
+fn advance_clock(svm: &mut LiteSVM, seconds: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += seconds;
+    svm.set_sysvar(&clock);
+}
+
 fn token_amount(svm: &LiteSVM, address: &Pubkey) -> u64 {
     let account = svm.get_account(address).expect("token account should exist");
     TokenAccount::unpack(&account.data)
@@ -205,6 +215,10 @@ fn cancel_returns_the_tokens_to_the_maker() {
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+
+    // This test is about the signer seeds, so step past the cancellation time lock
+    // rather than exercising it here.
+    advance_clock(&mut svm, escrow::CANCEL_DELAY_SECONDS + 1);
 
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.

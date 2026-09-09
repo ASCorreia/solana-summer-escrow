@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::Escrow;
+use crate::{error::EscrowError, Escrow, CANCEL_DELAY_SECONDS};
 
 #[derive(Accounts)]
 pub struct Cancel<'info> {
@@ -30,6 +30,25 @@ pub struct Cancel<'info> {
 }
 
 pub fn handler(ctx: Context<Cancel>) -> Result<()> {
+    // An offer that can be pulled instantly is a free option: a taker who has already
+    // signed and paid fees can be left holding a failed transaction. Keeping the offer
+    // open for CANCEL_DELAY_SECONDS closes that window.
+    //
+    // Checked, because `created_at` is stored state — wrapping past i64::MAX would
+    // yield an unlock time in the distant past and defeat the lock entirely.
+    let unlock_at = ctx
+        .accounts
+        .escrow
+        .created_at
+        .checked_add(CANCEL_DELAY_SECONDS)
+        .ok_or(EscrowError::TimeLockActive)?;
+
+    // `>=`, so cancelling exactly on the boundary second is allowed.
+    require!(
+        Clock::get()?.unix_timestamp >= unlock_at,
+        EscrowError::TimeLockActive
+    );
+
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.vault_a.to_account_info(),
         mint: ctx.accounts.mint_a.to_account_info(),
