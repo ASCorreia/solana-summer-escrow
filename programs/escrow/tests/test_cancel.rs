@@ -8,7 +8,7 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    prelude::Clock, solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -117,6 +117,12 @@ fn token_amount(svm: &LiteSVM, address: &Pubkey) -> u64 {
         .amount
 }
 
+fn advance_clock(svm: &mut LiteSVM, seconds: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += seconds;
+    svm.set_sysvar(&clock);
+}
+
 /// Creates a funded maker and a live escrow holding AMOUNT_A of mint A.
 ///
 /// Returns (maker, escrow PDA, mint A, maker's ATA for A, the escrow's vault).
@@ -198,9 +204,42 @@ fn build_cancel_ix(
 // ---------- the test ----------
 
 #[test]
-fn cancel_returns_the_tokens_to_the_maker() {
+fn cancel_is_rejected_before_the_time_lock() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let result = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    assert!(result.is_err(), "cancel should fail while the time lock is active");
+    assert_eq!(token_amount(&svm, &maker_ata_a), 0);
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A);
+}
+
+#[test]
+fn cancel_succeeds_at_the_time_lock_boundary() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+    advance_clock(&mut svm, escrow::CANCEL_DELAY_SECONDS);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed at the time lock boundary");
+
+    assert_eq!(token_amount(&svm, &maker_ata_a), AMOUNT_A);
+}
+
+#[test]
+fn cancel_returns_the_tokens_to_the_maker_after_the_time_lock() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+    advance_clock(&mut svm, escrow::CANCEL_DELAY_SECONDS + 1);
 
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");

@@ -151,4 +151,5 @@ fn test_make() {
     assert_eq!(escrow_state.mint_b, mint_b_pk);
     assert_eq!(escrow_state.amount_a, amount_a);
     assert_eq!(escrow_state.amount_b, amount_b);
+    assert_eq!(escrow_state.created_at, 0);
 }
