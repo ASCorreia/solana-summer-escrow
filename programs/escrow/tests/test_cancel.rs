@@ -20,9 +20,10 @@ use solana_pubkey::Pubkey;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 use spl_associated_token_account_interface::address::get_associated_token_address;
+use anchor_lang::prelude::Clock;
 use spl_token_interface::{
     state::{Account as TokenAccount, AccountState, Mint},
-    ID as TOKEN_PROGRAM_ID,
+    ID as TOKEN_PROGRAM_ID,   
 };
 
 const SEED: u16 = 42;
@@ -205,6 +206,13 @@ fn cancel_returns_the_tokens_to_the_maker() {
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+    
+    // Move the clock forward past the lock so this pre-existing test still works
+    // now that cancel enforces a time lock.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
+
 
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
@@ -232,3 +240,61 @@ fn cancel_returns_the_tokens_to_the_maker() {
         "escrow should be closed"
     );
 }
+
+#[test]
+fn cancel_too_early_fails() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // No time has passed since `make`  the lock should still be active.
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    let err = res.unwrap_err();
+    let logs = err.meta.logs.join("\n");
+    assert!(
+        logs.contains("TimeLockActive"),
+        "expected the time lock error, got: {logs}"
+    );
+}
+
+#[test]
+fn cancel_after_delay_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Move the clock forward past the 5-minute lock.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed once the delay has passed");
+}
+
+#[test]
+fn cancel_exactly_at_boundary_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Move the clock forward by exactly CANCEL_DELAY_SECONDS (300).
+    // "Five minutes have passed" includes this exact moment, so cancel must succeed.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 300;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed exactly at the boundary (>=), not just after it");
+}
+
