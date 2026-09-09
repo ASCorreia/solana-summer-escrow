@@ -4,4 +4,8 @@ use anchor_lang::prelude::*;
 pub enum ErrorCode {
     #[msg("Custom error message")]
     CustomError,
+    #[msg("Time Lock is Activated")]
+    TimeLockActive,
+    #[msg("Arithmetic overflow")]
+    Overflow,
 }
