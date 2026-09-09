@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::Escrow;
+use crate::{error::ErrorCode, Escrow, CANCEL_DELAY_SECONDS};
 
 #[derive(Accounts)]
 pub struct Cancel<'info> {
@@ -30,6 +30,25 @@ pub struct Cancel<'info> {
 }
 
 pub fn handler(ctx: Context<Cancel>) -> Result<()> {
+    // The time lock is checked before anything moves, so a rejected cancel leaves
+    // the vault exactly as it was.
+    //
+    // `checked_add` rather than `+`: `created_at` comes out of stored state, and a
+    // release build wraps on overflow instead of panicking. A garbage timestamp near
+    // i64::MAX would wrap to a large negative number and make the comparison below
+    // trivially true — the lock would open instead of holding.
+    let now = Clock::get()?.unix_timestamp;
+    let unlock_at = ctx
+        .accounts
+        .escrow
+        .created_at
+        .checked_add(CANCEL_DELAY_SECONDS)
+        .ok_or(ErrorCode::TimeLockActive)?;
+
+    // `>=`, so cancelling exactly on the boundary is allowed: at created_at + 300 the
+    // five minutes have, in fact, passed.
+    require!(now >= unlock_at, ErrorCode::TimeLockActive);
+
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.vault_a.to_account_info(),
         mint: ctx.accounts.mint_a.to_account_info(),

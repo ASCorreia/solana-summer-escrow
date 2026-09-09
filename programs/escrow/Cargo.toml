@@ -34,6 +34,10 @@ solana-account = "3.4.0"
 solana-pubkey = "3.0.0"
 solana-program-pack = "3.1.0"
 solana-program-option = "3.1.0"
+# Already in the dependency graph via litesvm; named here so the cancel tests can
+# assert on the exact program error code rather than merely "the transaction failed".
+solana-instruction-error = "2.2.0"
+solana-transaction-error = "3.1.0"
 spl-token-interface = "2.0.0"
 spl-associated-token-account-interface = "2.0.0"
 
