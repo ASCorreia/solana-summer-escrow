@@ -1315,6 +1315,7 @@ dependencies = [
  "anchor-spl",
  "litesvm",
  "solana-account",
+ "solana-instruction-error",
  "solana-keypair",
  "solana-message",
  "solana-program-option",
@@ -1322,6 +1323,7 @@ dependencies = [
  "solana-pubkey 3.0.0",
  "solana-signer",
  "solana-transaction",
+ "solana-transaction-error",
  "spl-associated-token-account-interface",
  "spl-token-interface",
 ]
