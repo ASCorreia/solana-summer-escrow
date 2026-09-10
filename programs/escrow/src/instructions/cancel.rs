@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::Escrow;
+use crate::{error::ErrorCode, CANCEL_DELAY_SECONDS, Escrow};
 
 #[derive(Accounts)]
 pub struct Cancel<'info> {
@@ -30,6 +30,17 @@ pub struct Cancel<'info> {
 }
 
 pub fn handler(ctx: Context<Cancel>) -> Result<()> {
+    let current_time = Clock::get()?.unix_timestamp;
+    let unlock_at = ctx
+        .accounts
+        .escrow
+        .created_at
+        .checked_add(CANCEL_DELAY_SECONDS)
+        .ok_or(error!(ErrorCode::Overflow))?;
+
+    require!(current_time >= unlock_at, ErrorCode::CustomError);
+
+
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.vault_a.to_account_info(),
         mint: ctx.accounts.mint_a.to_account_info(),
