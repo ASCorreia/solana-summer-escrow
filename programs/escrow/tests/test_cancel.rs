@@ -8,7 +8,8 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    prelude::Clock, solana_program::instruction::Instruction, AccountDeserialize,
+    InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -24,6 +25,12 @@ use spl_token_interface::{
     state::{Account as TokenAccount, AccountState, Mint},
     ID as TOKEN_PROGRAM_ID,
 };
+
+use escrow::CANCEL_DELAY_SECONDS;
+
+fn timelock_error_code() -> u32 {
+    u32::from(escrow::error::ErrorCode::CustomError)
+}
 
 const SEED: u16 = 42;
 const AMOUNT_A: u64 = 1_000_000;
@@ -117,6 +124,30 @@ fn token_amount(svm: &LiteSVM, address: &Pubkey) -> u64 {
         .amount
 }
 
+/// Moves the validator clock forward by `seconds`.
+///
+/// `warp_to_slot` is the wrong tool here: it moves the slot and leaves
+/// `unix_timestamp` untouched, and `unix_timestamp` is the only field the
+/// timelock reads. The sysvar has to be written directly.
+fn advance_clock(svm: &mut LiteSVM, seconds: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += seconds;
+    svm.set_sysvar(&clock);
+}
+
+/// Pins the clock to an absolute timestamp, for the boundary test.
+fn set_clock(svm: &mut LiteSVM, unix_timestamp: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp = unix_timestamp;
+    svm.set_sysvar(&clock);
+}
+
+fn escrow_state(svm: &LiteSVM, escrow: &Pubkey) -> escrow::Escrow {
+    let account = svm.get_account(escrow).expect("escrow should exist");
+    escrow::Escrow::try_deserialize(&mut account.data.as_slice())
+        .expect("should deserialize as an escrow")
+}
+
 /// Creates a funded maker and a live escrow holding AMOUNT_A of mint A.
 ///
 /// Returns (maker, escrow PDA, mint A, maker's ATA for A, the escrow's vault).
@@ -195,7 +226,7 @@ fn build_cancel_ix(
     )
 }
 
-// ---------- the test ----------
+// ---------- tests ----------
 
 #[test]
 fn cancel_returns_the_tokens_to_the_maker() {
@@ -205,6 +236,8 @@ fn cancel_returns_the_tokens_to_the_maker() {
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+
+    advance_clock(&mut svm, CANCEL_DELAY_SECONDS + 1);
 
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
@@ -230,5 +263,59 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert!(
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
+    );
+}
+
+#[test]
+fn cancel_before_the_delay_is_rejected() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let failure = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect_err("cancel inside the timelock window must be rejected");
+
+    let expected = format!("Error Number: {}", timelock_error_code());
+    assert!(
+        failure.meta.logs.iter().any(|line| line.contains(&expected)),
+        "expected the timelock error, got: {:#?}",
+        failure.meta.logs
+    );
+
+    assert_eq!(
+        token_amount(&svm, &vault_a),
+        AMOUNT_A,
+        "vault should still hold the deposit"
+    );
+    assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should get nothing back");
+    assert!(
+        svm.get_account(&escrow_pda).is_some_and(|a| !a.data.is_empty()),
+        "escrow should still be open"
+    );
+}
+
+/// The only test that can tell `>=` from `>`.
+#[test]
+fn cancel_at_exactly_the_boundary_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let created_at = escrow_state(&svm, &escrow_pda).created_at;
+    set_clock(&mut svm, created_at + CANCEL_DELAY_SECONDS);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel exactly at created_at + the delay should succeed");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have every token back"
     );
 }
