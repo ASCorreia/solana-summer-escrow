@@ -8,7 +8,8 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    solana_program::{clock::Clock, instruction::Instruction}, AccountDeserialize, InstructionData,
+    ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -117,6 +118,19 @@ fn token_amount(svm: &LiteSVM, address: &Pubkey) -> u64 {
         .amount
 }
 
+fn escrow_created_at(svm: &LiteSVM, address: &Pubkey) -> i64 {
+    let account = svm.get_account(address).expect("escrow should exist");
+    escrow::Escrow::try_deserialize(&mut account.data.as_slice())
+        .expect("should deserialize escrow")
+        .created_at
+}
+
+fn set_clock(svm: &mut LiteSVM, unix_timestamp: i64) {
+    let mut clock: Clock = svm.get_sysvar();
+    clock.unix_timestamp = unix_timestamp;
+    svm.set_sysvar(&clock);
+}
+
 /// Creates a funded maker and a live escrow holding AMOUNT_A of mint A.
 ///
 /// Returns (maker, escrow PDA, mint A, maker's ATA for A, the escrow's vault).
@@ -198,37 +212,66 @@ fn build_cancel_ix(
 // ---------- the test ----------
 
 #[test]
-fn cancel_returns_the_tokens_to_the_maker() {
+fn cancel_rejects_before_five_minutes() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
 
-    // Precondition: `make` moved the tokens out of the maker and into the vault.
-    assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
-    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+    let result = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
 
-    // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
-    // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
+    assert!(result.is_err(), "cancel should be rejected before the delay");
+    assert_eq!(token_amount(&svm, &maker_ata_a), 0);
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A);
+    assert!(svm.get_account(&escrow_pda).is_some());
+}
+
+#[test]
+fn cancel_succeeds_after_five_minutes() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+    let created_at = escrow_created_at(&svm, &escrow_pda);
+    set_clock(
+        &mut svm,
+        created_at
+            .checked_add(escrow::CANCEL_DELAY_SECONDS + 1)
+            .unwrap(),
+    );
+
     send(
         &mut svm,
         &maker,
         build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
     )
-    .expect("cancel should return the maker's tokens and close the vault");
+    .expect("cancel should succeed after the delay");
 
-    // The deposit came home, whole.
-    assert_eq!(
-        token_amount(&svm, &maker_ata_a),
-        AMOUNT_A,
-        "maker should have every token back"
+    assert_eq!(token_amount(&svm, &maker_ata_a), AMOUNT_A);
+    assert!(svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()));
+    assert!(svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()));
+}
+
+#[test]
+fn cancel_succeeds_at_exactly_five_minutes() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+    let created_at = escrow_created_at(&svm, &escrow_pda);
+    set_clock(
+        &mut svm,
+        created_at
+            .checked_add(escrow::CANCEL_DELAY_SECONDS)
+            .unwrap(),
     );
 
-    // Both accounts are gone and their rent was reclaimed.
-    assert!(
-        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()),
-        "vault should be closed"
-    );
-    assert!(
-        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
-        "escrow should be closed"
-    );
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed at the delay boundary");
+
+    assert_eq!(token_amount(&svm, &maker_ata_a), AMOUNT_A);
+    assert!(svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()));
+    assert!(svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()));
 }

@@ -1,1 +1,56 @@
-/target
+# Anchor
+target/
+.anchor/
+test-ledger/
+
+# Solana keypairs
+id.json
+wallet.json
+keypair.json
+*-keypair.json
+*.keypair.json
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Node
+node_modules/
+
+# Next.js
+.next/
+out/
+.vercel/
+
+# Rust
+*.rs.bk
+
+# TypeScript
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# Testing
+coverage/
+.nyc_output/
+
+# Cache
+.turbo/
+.cache/
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Private keys / certificates
+*.pem
+*.key
