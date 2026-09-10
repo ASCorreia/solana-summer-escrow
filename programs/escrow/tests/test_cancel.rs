@@ -8,6 +8,7 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
+    prelude::Clock,
     solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
@@ -206,14 +207,118 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
 
-    // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
-    // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
+    // Advance the clock past the 5-minute time lock so cancel is allowed.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
+
     send(
         &mut svm,
         &maker,
         build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
     )
     .expect("cancel should return the maker's tokens and close the vault");
+
+    // The deposit came home, whole.
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have every token back"
+    );
+
+    // Both accounts are gone and their rent was reclaimed.
+    assert!(
+        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()),
+        "vault should be closed"
+    );
+    assert!(
+        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
+        "escrow should be closed"
+    );
+}
+
+// ---------- time-lock tests ----------
+
+#[test]
+fn cancel_too_early() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Don't advance the clock — created_at is 0, clock is still 0, so 0 < 0 + 300.
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    assert!(res.is_err(), "cancel should be rejected before the time lock elapses");
+
+    // Verify the rejection is specifically our TimeLockActive error, not some other failure.
+    let err = res.unwrap_err();
+    let logs = err.meta.logs.join("\n");
+    assert!(
+        logs.contains("TimeLockActive"),
+        "expected the time lock error, got: {logs}"
+    );
+
+    // Vault should still hold the tokens.
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should still hold the deposit");
+}
+
+#[test]
+fn cancel_at_exact_boundary() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Advance clock to exactly created_at + 300 (the boundary).
+    // created_at is 0 on a fresh LiteSVM, so set unix_timestamp to 300.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp = 300;
+    svm.set_sysvar(&clock);
+
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    assert!(res.is_ok(), "cancel at exactly created_at + 300 should succeed: {:?}", res.err());
+
+    // The deposit came home.
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have every token back"
+    );
+
+    // Both accounts are gone.
+    assert!(
+        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()),
+        "vault should be closed"
+    );
+    assert!(
+        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
+        "escrow should be closed"
+    );
+}
+
+#[test]
+fn cancel_late_enough() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Advance clock past the lock: created_at + 301.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp = 301;
+    svm.set_sysvar(&clock);
+
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    assert!(res.is_ok(), "cancel after five minutes should succeed: {:?}", res.err());
 
     // The deposit came home, whole.
     assert_eq!(
