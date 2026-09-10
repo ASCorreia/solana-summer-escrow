@@ -1,1 +1,26 @@
+# Rust / Cargo build artifacts
 /target
+
+# Anchor
+.anchor
+
+# Node / JS
+node_modules
+
+# Solana test validator ledger
+test-ledger
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
