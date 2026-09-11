@@ -152,3 +152,4 @@ fn test_make() {
     assert_eq!(escrow_state.amount_a, amount_a);
     assert_eq!(escrow_state.amount_b, amount_b);
 }
+
