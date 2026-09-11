@@ -8,6 +8,7 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
+    prelude::Clock,
     solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
@@ -205,6 +206,11 @@ fn cancel_returns_the_tokens_to_the_maker() {
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+
+    // cancel is only allowed after the escrow's expiration, so move the clock forward.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 300;
+    svm.set_sysvar(&clock);
 
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
