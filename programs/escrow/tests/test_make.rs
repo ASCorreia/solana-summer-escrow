@@ -1,5 +1,6 @@
 use anchor_lang::{
-    solana_program::instruction::Instruction, AccountDeserialize, InstructionData, ToAccountMetas,
+    prelude::Clock, solana_program::instruction::Instruction, AccountDeserialize, InstructionData,
+    ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -132,8 +133,12 @@ fn test_make() {
     let msg = Message::new_with_blockhash(&[instruction], Some(&maker_pk), &blockhash);
     let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[maker]).unwrap();
 
+    let clock_before = svm.get_sysvar::<Clock>().unix_timestamp;
+
     let res = svm.send_transaction(tx);
     assert!(res.is_ok(), "make transaction failed: {:?}", res.err());
+
+    let clock_after = svm.get_sysvar::<Clock>().unix_timestamp;
 
     // Verify vault received amount_a tokens and is owned by the escrow PDA
     let vault_account = svm.get_account(&vault_a).unwrap();
@@ -144,11 +149,17 @@ fn test_make() {
 
     // Verify escrow account was populated correctly
     let escrow_raw = svm.get_account(&escrow_pda).unwrap();
-    let escrow_state =
-        escrow::Escrow::try_deserialize(&mut escrow_raw.data.as_slice()).unwrap();
+    let escrow_state = escrow::Escrow::try_deserialize(&mut escrow_raw.data.as_slice()).unwrap();
     assert_eq!(escrow_state.maker, maker_pk);
     assert_eq!(escrow_state.mint_a, mint_a_pk);
     assert_eq!(escrow_state.mint_b, mint_b_pk);
     assert_eq!(escrow_state.amount_a, amount_a);
     assert_eq!(escrow_state.amount_b, amount_b);
+    assert!(
+        escrow_state.created_at >= clock_before && escrow_state.created_at <= clock_after,
+        "created_at {} should be between {} and {}",
+        escrow_state.created_at,
+        clock_before,
+        clock_after
+    );
 }
